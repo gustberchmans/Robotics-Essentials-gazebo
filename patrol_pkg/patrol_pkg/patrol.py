@@ -4,6 +4,8 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from rclpy.qos import ReliabilityPolicy, QoSProfile
 
+import random
+
 class Subpub(Node):
 
     def __init__(self):
@@ -51,7 +53,7 @@ class Subpub(Node):
         # Logic for moving and turning
         if front_distance > 0.6:  # If clear in front, move forward
             self.cmd.linear.x = 0.2
-            self.cmd.angular.z = 0.0
+            self.cmd.angular.z = random.uniform(-1.0, 1.0)
             self.turning = False  # Stop turning when moving forward
         else:
             # Check if we are turning or need to start turning
