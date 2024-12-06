@@ -53,7 +53,7 @@ class Subpub(Node):
         # Logic for moving and turning
         if front_distance > 0.6:  # If clear in front, move forward
             self.cmd.linear.x = 0.2
-            self.cmd.angular.z = random.uniform(-1.0, 1.0)
+            self.cmd.angular.z = random.uniform(-0.75, 0.75)
             self.turning = False  # Stop turning when moving forward
         else:
             # Check if we are turning or need to start turning
