@@ -3,13 +3,19 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 import re
 
 class LidarController(Node):
     def __init__(self):
         super().__init__('lidar_controller')
         self.publisher_ = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.laser_subscriber = self.create_subscription(LaserScan, '/scan', self.laser_callback, 10)
+        
+        # Define QoS with system default reliability policy
+        qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.SYSTEM_DEFAULT)
+        
+        # Create the subscription with the defined QoS settings
+        self.laser_subscriber = self.create_subscription(LaserScan, '/scan', self.laser_callback, qos_profile)
         self.gesture_subscriber = self.create_subscription(String, 'gesture_command', self.gesture_callback, 10)
 
         # Initialize laser data and gesture
@@ -19,8 +25,17 @@ class LidarController(Node):
         self.cmd = Twist()  # Initialize the cmd object
 
     def laser_callback(self, msg):
-        # Save the frontal laser scan info at 0°
-        self.laser_forward = msg.ranges[0] if len(msg.ranges) > 0 else float('inf')
+        # We are only interested in the LIDAR reading at 0° (the front of the robot)
+        # msg.ranges[0] corresponds to the distance directly in front (0° angle)
+        
+        self.laser_forward = msg.ranges[0]  # Get the laser reading at 0°
+        
+        # Filter out invalid readings (e.g., inf or NaN)
+        if self.laser_forward <= 0:  
+            self.laser_forward = float('inf')  # If the reading is invalid or too close, set it to infinity
+
+        # Debug logging for laser data
+        self.get_logger().info(f'Laser forward distance: {self.laser_forward}')
 
     def gesture_callback(self, msg):
         # Parse the gesture message to extract the gesture and speed
