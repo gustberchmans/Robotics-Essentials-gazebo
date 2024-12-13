@@ -23,7 +23,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'simple_publisher = handtracking_pkg.simple_publisher:main'
+            'simple_publisher = handtracking_pkg.simple_publisher:main',
+            'lidar = handtracking_pkg.lidar:main',  # Added entry for lidar
         ],
     },
 )

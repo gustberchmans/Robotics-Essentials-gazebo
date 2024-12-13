@@ -1,150 +1,78 @@
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
-from sensor_msgs.msg import LaserScan
-from rclpy.qos import ReliabilityPolicy, QoSProfile
+from std_msgs.msg import String  # New import
 import cv2
 import mediapipe as mp
-from cv_bridge import CvBridge
+import time
 
-class GestureControlRobot(Node):
-
+class GesturePublisher(Node):
     def __init__(self):
-        super().__init__('gesture_control_robot')
-        # ROS2 Publisher and Subscriber
-        self.publisher_ = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.subscriber = self.create_subscription(
-            LaserScan, '/scan', self.laser_callback, QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
-
-        # Timer for periodic tasks
+        super().__init__('gesture_publisher')
+        self.publisher_ = self.create_publisher(String, 'gesture_command', 10)  # Publishes gestures
         self.timer_period = 0.1
-        self.timer = self.create_timer(self.timer_period, self.motion)
-
-        # Variables
-        self.laser_forward = 0
-        self.cmd = Twist()
-        self.gesture_detected = False
-        self.thumbs_down_detected = False
-        self.turn_left_detected = False
-        self.turn_right_detected = False
+        self.timer = self.create_timer(self.timer_period, self.detect_gesture)
 
         # MediaPipe Hand Detector
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.5)
         self.mp_draw = mp.solutions.drawing_utils
-
-        # OpenCV Bridge
-        self.bridge = CvBridge()
-
-        # Start Video Capture
-        self.cap = cv2.VideoCapture(0)  # Use your webcam
-
-    def laser_callback(self, msg):
-        # Save the frontal laser scan info at 0°
-        self.laser_forward = msg.ranges[359]
+        self.cap = cv2.VideoCapture(0)
 
     def detect_gesture(self):
         ret, frame = self.cap.read()
         if not ret:
-            return False
+            return
 
-        # Convert the frame to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(frame_rgb)
 
-        # Reset gesture detection
-        self.gesture_detected = False
-        self.thumbs_down_detected = False
-        self.turn_left_detected = False
-        self.turn_right_detected = False
-
-        # Initialize default positions
-        thumb_tip_pos = (0, 0)
-        wrist_pos = (0, 0)
+        gesture = "stop"  # Default gesture
+        thumb_tip_y = 0.0  # Default thumb's vertical position
 
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                # Draw landmarks on the hand
-                self.mp_draw.draw_landmarks(frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
-
-                # Extract landmark positions
+                # Extract landmarks
                 landmarks = hand_landmarks.landmark
                 thumb_tip = landmarks[self.mp_hands.HandLandmark.THUMB_TIP]
-                thumb_ip = landmarks[self.mp_hands.HandLandmark.THUMB_IP]
                 index_tip = landmarks[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
                 wrist = landmarks[self.mp_hands.HandLandmark.WRIST]
 
-                # Calculate positions in image space
-                h, w, _ = frame.shape
-                thumb_tip_pos = (int(thumb_tip.x * w), int(thumb_tip.y * h))
-                wrist_pos = (int(wrist.x * w), int(wrist.y * h))
-
-                # Determine thumb orientation
+                # Gesture detection logic
+                thumb_angle = abs(thumb_tip.x - index_tip.x) / abs(thumb_tip.y - index_tip.y + 1e-5)
                 thumb_above_wrist = thumb_tip.y < wrist.y
-                thumb_below_wrist = thumb_tip.y > wrist.y
-                thumb_far_left = thumb_tip.x < wrist.x - 0.1
-                thumb_far_right = thumb_tip.x > wrist.x + 0.1
 
-                # Compute thumb angles (Optional)
-                thumb_angle = abs(thumb_ip.x - thumb_tip.x) / abs(thumb_ip.y - thumb_tip.y + 1e-5)
+                if thumb_above_wrist and thumb_angle < 1.0:
+                    gesture = "move_forward"
+                elif not thumb_above_wrist and thumb_angle < 1.0:
+                    gesture = "move_backward"
+                elif thumb_tip.x < wrist.x - 0.1:
+                    gesture = "turn_right"
+                elif thumb_tip.x > wrist.x + 0.1:
+                    gesture = "turn_left"
 
-                # Gesture detection
-                if thumb_above_wrist and thumb_angle < 1.0:  # Adjust angle threshold as needed
-                    self.gesture_detected = True  # Thumbs-up
-                elif thumb_below_wrist and thumb_angle < 1.0:
-                    self.thumbs_down_detected = True  # Thumbs-down
-                elif thumb_far_left and thumb_angle > 1.0:
-                    self.turn_right_detected = True  # Thumb pointing left
-                elif thumb_far_right and thumb_angle > 1.0:
-                    self.turn_left_detected = True  # Thumb pointing right
+                # Capture the thumb's vertical position (y-coordinate) to calculate speed
+                thumb_tip_y = thumb_tip.y
 
-        # Debugging
-        self.get_logger().info(
-            f'Thumb ({thumb_tip_pos[0]}, {thumb_tip_pos[1]}), Wrist ({wrist_pos[0]}, {wrist_pos[1]}), '
-            f'Thumbs up: {self.gesture_detected}, Thumbs down: {self.thumbs_down_detected}, '
-            f'Turn left: {self.turn_left_detected}, Turn right: {self.turn_right_detected}'
-        )
+        # Map the thumb's y position (0 to 1) to the speed range [0.1, 0.2]
+        speed = self.map_thumb_to_speed(thumb_tip_y)
 
-        # Display the frame with debugging
-        cv2.circle(frame, thumb_tip_pos, 5, (0, 255, 0), -1)  # Green for thumb tip
-        cv2.circle(frame, wrist_pos, 5, (255, 0, 0), -1)  # Blue for wrist
-        cv2.imshow("Hand Gesture Debug", frame)
+        # Create a message that includes both the gesture and speed
+        gesture_message = f"{gesture} thumb_tip_y: {thumb_tip_y} speed: {speed}"
+
+        # Publish the gesture and speed
+        self.publisher_.publish(String(data=gesture_message))
+        self.get_logger().info(f'Published Gesture with Speed: {gesture_message}')
+
+        # Display frame (optional)
+        cv2.imshow("Hand Gesture", frame)
         cv2.waitKey(1)
 
-    def motion(self):
-        # Detect gesture
-        self.detect_gesture()
-
-        # Log the laser and gesture status
-        self.get_logger().info(
-            f'Laser forward: {self.laser_forward}, Thumbs up: {self.gesture_detected}, Thumbs down: {self.thumbs_down_detected}, '
-            f'Turn left: {self.turn_left_detected}, Turn right: {self.turn_right_detected}'
-        )
-
-        # Move logic
-        if self.gesture_detected and self.laser_forward > 0.5:
-            # Move forward
-            self.cmd.linear.x = 0.2
-            self.cmd.angular.z = 0.0
-        elif self.thumbs_down_detected and self.laser_forward > 0.5:
-            # Move backward
-            self.cmd.linear.x = -0.2
-            self.cmd.angular.z = 0.0
-        elif self.turn_left_detected:
-            # Turn left
-            self.cmd.linear.x = 0.0
-            self.cmd.angular.z = 0.5
-        elif self.turn_right_detected:
-            # Turn right
-            self.cmd.linear.x = 0.0
-            self.cmd.angular.z = -0.5
-        else:
-            # Stop
-            self.cmd.linear.x = 0.0
-            self.cmd.angular.z = 0.0
-
-        # Publish the command
-        self.publisher_.publish(self.cmd)
+    def map_thumb_to_speed(self, thumb_tip_y):
+        # Map the thumb's y position (0 to 1) to the speed range [0.1, 0.2]
+        min_speed = 0.1
+        max_speed = 0.2
+        speed = min_speed + (max_speed - min_speed) * (1 - thumb_tip_y)  # Inverse for higher thumb = faster speed
+        return round(speed, 2)  # Round to two decimal places for cleaner output
 
     def cleanup(self):
         self.cap.release()
@@ -152,15 +80,18 @@ class GestureControlRobot(Node):
 
 
 def main(args=None):
+    
+    time.sleep(0.05)
+    
     rclpy.init(args=args)
-    robot = GestureControlRobot()
+    node = GesturePublisher()
     try:
-        rclpy.spin(robot)
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        robot.cleanup()
-        robot.destroy_node()
+        node.cleanup()
+        node.destroy_node()
         rclpy.shutdown()
 
 
